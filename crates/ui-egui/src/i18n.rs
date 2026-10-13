@@ -14,6 +14,7 @@ mod de;
 mod es;
 mod fr;
 mod ko;
+mod nb;
 mod pt;
 mod ru;
 mod sr;
@@ -35,10 +36,12 @@ pub enum Language {
     Cs,
     Fr,
     Sr,
+    Nb,
 }
 
 impl Language {
-    pub const ALL: [Self; 11] = [Self::En, Self::Es, Self::Zh, Self::Ja, Self::Ko, Self::Ru, Self::PtBr, Self::De, Self::Cs, Self::Fr, Self::Sr];
+    pub const ALL: [Self; 12] =
+        [Self::En, Self::Es, Self::Zh, Self::Ja, Self::Ko, Self::Ru, Self::PtBr, Self::De, Self::Cs, Self::Fr, Self::Sr, Self::Nb];
 
     /// The language's own name, shown in the switcher.
     pub fn name(self) -> &'static str {
@@ -54,6 +57,7 @@ impl Language {
             Self::Cs => "Čeština",
             Self::Fr => "Français",
             Self::Sr => "Srpski",
+            Self::Nb => "Norsk (bokmål)",
         }
     }
 
@@ -71,6 +75,7 @@ impl Language {
             Self::Cs => "cs",
             Self::Fr => "fr",
             Self::Sr => "sr",
+            Self::Nb => "nb",
         }
     }
 
@@ -91,6 +96,8 @@ impl Language {
             "cs" => Some(Self::Cs),
             "fr" => Some(Self::Fr),
             "sr" => Some(Self::Sr),
+            // Norwegian: the Bokmål catalog serves `no` (macrolanguage) and Nynorsk alike.
+            "nb" | "no" | "nn" => Some(Self::Nb),
             _ => None,
         }
     }
@@ -129,9 +136,46 @@ impl Language {
             Self::Cs => cs::translate(text),
             Self::Fr => fr::translate(text),
             Self::Sr => sr::translate(text),
+            Self::Nb => nb::translate(text),
         };
-        translated.unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
+        branded(translated.unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label)))
     }
+}
+
+/// The product name a host program shows instead of "GridCraft" ([`set_product_name`]).
+static PRODUCT: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+
+/// Interface strings with the product name put in, made once each.
+static BRANDED: std::sync::Mutex<Vec<(String, &'static str)>> = std::sync::Mutex::new(Vec::new());
+
+/// A program that embeds the spreadsheet under its own name: every interface string says `name`
+/// where it would say "GridCraft". Set once, before the first frame; later calls are ignored.
+pub fn set_product_name(name: &'static str) {
+    let _ = PRODUCT.set(name);
+}
+
+/// The product name the interface shows ("GridCraft" unless a host set another).
+pub fn product() -> &'static str {
+    PRODUCT.get().copied().unwrap_or("GridCraft")
+}
+
+/// `s` with the host's product name in place of "GridCraft" (unchanged without one).
+fn branded(s: &str) -> &str {
+    let Some(name) = PRODUCT.get() else { return s };
+    if !s.contains("GridCraft") {
+        return s;
+    }
+    let Ok(mut cache) = BRANDED.lock() else { return s };
+    if let Some((_, b)) = cache.iter().find(|(k, _)| k == s) {
+        return b;
+    }
+    // A bounded set: only the few interface strings that name the product.
+    if cache.len() >= 256 {
+        return s;
+    }
+    let b: &'static str = Box::leak(s.replace("GridCraft", name).into_boxed_str());
+    cache.push((s.to_owned(), b));
+    b
 }
 
 /// Deserializes a saved language leniently: an unknown or malformed value (a language removed in a
@@ -611,6 +655,7 @@ mod tests {
             assert!(cs::translate(english).is_some_and(|text| !text.is_empty()), "missing Czech: {english}");
             assert!(fr::translate(english).is_some_and(|text| !text.is_empty()), "missing French: {english}");
             assert!(sr::translate(english).is_some_and(|text| !text.is_empty()), "missing Serbian: {english}");
+            assert!(nb::translate(english).is_some_and(|text| !text.is_empty()), "missing Norwegian: {english}");
         }
         assert_eq!(Language::Ja.tr("Data"), "データ");
         assert_eq!(Language::Zh.tr("Data"), "数据");
@@ -644,6 +689,10 @@ mod tests {
         assert_eq!(Language::Sr.tr("Sheet1!A1"), "Sheet1!A1");
         assert_eq!(Language::Sr.tr("Page Layout|Orientation"), "Orijentacija");
         assert_eq!(Language::Sr.tr("Orientation"), "Orijentacija");
+        assert_eq!(Language::Nb.tr("Data"), "Data");
+        assert_eq!(Language::Nb.tr("Formulas"), "Formler");
+        assert_eq!(Language::Nb.tr("Page Layout|Orientation"), "Papirretning");
+        assert_eq!(Language::Nb.tr("Sheet1!A1"), "Sheet1!A1");
         assert_eq!(Language::parse("xx"), None);
     }
 
@@ -685,6 +734,9 @@ mod tests {
         assert_eq!(Language::from_tag("sr-Latn-RS"), Some(Language::Sr));
         assert_eq!(Language::from_tag("sr-RS"), Some(Language::Sr));
         assert_eq!(Language::parse("sr"), Some(Language::Sr));
+        assert_eq!(Language::from_tag("nb-NO"), Some(Language::Nb));
+        assert_eq!(Language::from_tag("no"), Some(Language::Nb));
+        assert_eq!(Language::from_tag("nn_NO.UTF-8"), Some(Language::Nb));
     }
 
     #[test]

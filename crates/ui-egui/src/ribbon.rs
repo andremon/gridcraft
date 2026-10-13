@@ -42,15 +42,16 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
         let rect = ui.max_rect();
         // Dragging the empty title area moves the window.
         let bg = ui.interact(rect, ui.id().with("drag_title"), Sense::click_and_drag());
-        if bg.drag_started() {
+        if bg.drag_started() && app.owns_window {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
         }
-        if bg.double_clicked() {
+        if bg.double_clicked() && app.owns_window {
             let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
         }
         ui.horizontal_centered(|ui| {
-            ui.add_space(TITLE_LEFT_PAD);
+            // An embedded spreadsheet has no traffic lights to leave room for.
+            ui.add_space(if app.owns_window { TITLE_LEFT_PAD } else { 8.0 });
             // AutoSave toggle (saves after each change when the workbook has a file).
             ui.label(egui::RichText::new("AutoSave").font(theme::ui_font(12.5)).color(t.text_dim));
             let on = app.grid.autosave();
@@ -1439,7 +1440,7 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
             // in dialogs.rs) — otherwise the prior cell/range selection is left in place, and
             // Del right after inserting deletes the source data instead of the chart.
             Ok(r) => app.selected_chart = r.get("chart").and_then(serde_json::Value::as_u64).and_then(|id| u32::try_from(id).ok()),
-            Err(e) => app.message = Some(("GridCraft".into(), crate::clean_error(&e))),
+            Err(e) => app.message = Some((crate::i18n::product().into(), crate::clean_error(&e))),
         }
     }
     ui.vertical(|ui| {

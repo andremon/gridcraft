@@ -263,6 +263,9 @@ pub struct SheetApp {
     /// holding other text. Once the cut has been pasted, Paste leaves this text alone.
     cut_text: Option<String>,
     pub started: f64,
+    /// Whether the app owns its window: names it after the workbook, and moves or maximizes it
+    /// from the title bar. A host that embeds the spreadsheet in its own window turns this off.
+    pub owns_window: bool,
 }
 
 impl SheetApp {
@@ -306,7 +309,16 @@ impl SheetApp {
             clipboard_text_at_copy: None,
             cut_text: None,
             started: now_ms(),
+            owns_window: true,
         }
+    }
+
+    /// Installs the interface fonts and theme again on the next frame. A host that shares its
+    /// window with the spreadsheet and puts its own look back while it is hidden calls this when
+    /// it is shown again.
+    pub fn restyle(&mut self) {
+        self.fonts_ready = false;
+        self.fonts_set = false;
     }
 
     /// One-time context setup: start cataloging the machine's fonts, then install the fonts and
@@ -538,7 +550,7 @@ impl SheetApp {
         if e.contains("is not available right now") {
             self.toast = Some((e, now_ms()));
         } else {
-            self.message = Some(("GridCraft".into(), clean_error(&e)));
+            self.message = Some((crate::i18n::product().into(), clean_error(&e)));
         }
     }
 
@@ -689,7 +701,7 @@ impl SheetApp {
         for req in self.session.take_ui_requests() {
             match req {
                 UiRequest::Dialog(name, params) => self.open_dialog(&name, params),
-                UiRequest::Message(m) => self.message = Some(("GridCraft".into(), m)),
+                UiRequest::Message(m) => self.message = Some((crate::i18n::product().into(), m)),
                 UiRequest::EditCell(text) => {
                     let text = text.map(|text| {
                         self.session
@@ -766,7 +778,7 @@ impl SheetApp {
             Ok(r) => self.after_open(Some(path), &r),
             // A password-protected workbook: ask for the password; the dialog opens it.
             Err(e) if e.contains(gridcraft_engine::io::PASSWORD_REQUIRED) => self.open_dialog("openPassword", json!({"path": path})),
-            Err(e) => self.message = Some(("GridCraft".into(), clean_error(&e))),
+            Err(e) => self.message = Some((crate::i18n::product().into(), clean_error(&e))),
         }
         self.after_engine();
     }
@@ -909,7 +921,7 @@ impl SheetApp {
         let text = match self.session.active().map(|d| formula_locale::canonical(&text, ed.locale, &d.wb, ed.sheet, ed.cell)) {
             Some(Ok(text)) => text,
             Some(Err(error)) => {
-                self.message = Some(("GridCraft".into(), error.to_string()));
+                self.message = Some((crate::i18n::product().into(), error.to_string()));
                 self.editor = Some(ed);
                 self.session.mode = gridcraft_engine::Mode::Edit;
                 return false;
@@ -921,7 +933,7 @@ impl SheetApp {
             && let Some((dv, msg)) = gridcraft_engine::cmd::data::check_validation(&d.wb, ed.sheet, ed.cell, &text)
         {
             if dv.error_style == gridcraft_engine::model::ErrorStyle::Stop {
-                let title = if dv.error_title.is_empty() { "GridCraft".to_string() } else { dv.error_title.clone() };
+                let title = if dv.error_title.is_empty() { crate::i18n::product().to_string() } else { dv.error_title.clone() };
                 self.message = Some((title, msg));
                 self.editor = Some(ed);
                 self.session.mode = gridcraft_engine::Mode::Edit;
@@ -943,7 +955,7 @@ impl SheetApp {
                 true
             }
             Err(e) => {
-                self.message = Some(("GridCraft".into(), clean_error(&e)));
+                self.message = Some((crate::i18n::product().into(), clean_error(&e)));
                 self.editor = Some(ed);
                 self.session.mode = gridcraft_engine::Mode::Edit;
                 false
@@ -1075,7 +1087,7 @@ impl SheetApp {
                     self.backstage = None;
                     self.open_dialog("openPassword", json!({"name": name, "base64": b64}));
                 }
-                Err(e) => self.message = Some(("GridCraft".into(), clean_error(&e))),
+                Err(e) => self.message = Some((crate::i18n::product().into(), clean_error(&e))),
             }
             self.after_engine();
         }
@@ -1157,7 +1169,9 @@ impl SheetApp {
             let _ = self.session.run("file.save", json!({}));
         }
         // Window title.
-        if let Some(d) = self.session.active() {
+        if self.owns_window
+            && let Some(d) = self.session.active()
+        {
             let title = format!("{}{}", d.display_title(), if d.is_dirty() { " — Edited" } else { "" });
             if self.grid.last_title.as_deref() != Some(title.as_str()) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
